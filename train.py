@@ -1,99 +1,47 @@
-import argparse
-import os
 import random
 import torch
 import torch.nn as nn
 import torch.nn.parallel
-import torch.backends.cudnn as cudnn
 import torch.optim as optim
 import torch.utils.data
-import torchvision.datasets as dset
-import torchvision.transforms as transforms
 import torchvision.utils as vutils
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-from IPython.display import HTML
 
+from data import create_dataloader, check_is_valid_file
 from models import Generator, Discriminator, weights_init
 
-if __name__ == '__main__':
-    manual_seed = 42
-    print("Random Seed: ", manual_seed)
-    random.seed(manual_seed)
-    torch.manual_seed(manual_seed)
+manual_seed = 42
+random.seed(manual_seed)
+torch.manual_seed(manual_seed)
 
-    data_root = "C:\\PUC\\2023-01\\gans-datasets"
-    workers = 1
-    batch_size = 128
-    image_size = 64
-    number_of_channels = 3
+data_root = "C:\\PUC\\2023-01\\gans-datasets"
+workers = 1
+batch_size = 128
+image_size = 64
+number_of_channels = 3
 
-    latent_vector_size = 100
-    generator_feature_maps_size = 64
-    discriminator_feature_maps_size = 64
-    num_epochs = 50
-    lr = 0.0002
-    beta1 = 0.5
-    number_of_gpus = 1
-
-
-    def check_is_valid_file(file):
-        return file.endswith('.jpg')
+latent_vector_size = 100
+generator_feature_maps_size = 64
+discriminator_feature_maps_size = 64
+num_epochs = 50
+lr = 0.0002
+beta1 = 0.5
+number_of_gpus = 1
+real_label = 1
+fake_label = 0
 
 
-    dataset = dset.ImageFolder(root=data_root,
-                               transform=transforms.Compose([
-                                   transforms.Resize(image_size),
-                                   transforms.CenterCrop(image_size),
-                                   transforms.ToTensor(),
-                                   transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                               ]),
-                               is_valid_file=check_is_valid_file)
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
-                                             shuffle=True, num_workers=workers)
-
-    device = torch.device("cuda:0" if (torch.cuda.is_available() and number_of_gpus > 0) else "cpu")
-
-    real_batch = next(iter(dataloader))
-    plt.figure(figsize=(8, 8))
-    plt.axis("off")
-    plt.title("Training Images")
-    plt.imshow(np.transpose(vutils.make_grid(real_batch[0].to(device)[:64], padding=2, normalize=True).cpu(), (1, 2, 0)))
-
-    generator = Generator(number_of_gpus,
-                          latent_vector_size,
-                          generator_feature_maps_size,
-                          number_of_channels).to(device)
-    discriminator = Discriminator(number_of_gpus,
-                                  number_of_channels,
-                                  discriminator_feature_maps_size,).to(device)
-
-    if (device.type == 'cuda') and (number_of_gpus > 1):
-        generator = nn.DataParallel(generator, list(range(number_of_gpus)))
-
-    if (device.type == 'cuda') and (number_of_gpus > 1):
-        discriminator = nn.DataParallel(discriminator, list(range(number_of_gpus)))
-
-    generator.apply(weights_init)
-    discriminator.apply(weights_init)
-
-    print(generator)
-    print(discriminator)
-
-    criterion = nn.BCELoss()
-    fixed_noise = torch.randn(64, latent_vector_size, 1, 1, device=device)
-
-    real_label = 1
-    fake_label = 0
-
-    generator_optimizer = optim.Adam(generator.parameters(), lr=lr, betas=(beta1, 0.999))
-    discriminator_optimizer = optim.Adam(discriminator.parameters(), lr=lr, betas=(beta1, 0.999))
-
-    img_list = []
-    generator_losses = []
-    discriminator_losses = []
-    iterations = 0
+def train(generator,
+          discriminator,
+          generator_optimizer,
+          discriminator_optimizer,
+          generator_losses,
+          discriminator_losses,
+          criterion,
+          num_epochs,
+          dataloader,
+          device,
+          iterations,
+          img_list):
 
     print("Starting Training Loop...")
     for epoch in range(num_epochs):
@@ -141,33 +89,86 @@ if __name__ == '__main__':
 
                         iterations += 1
 
-    plt.figure(figsize=(10, 5))
-    plt.title("Generator and Discriminator Loss During Training")
-    plt.plot(generator_losses, label="G")
-    plt.plot(discriminator_losses, label="D")
-    plt.xlabel("iterations")
-    plt.ylabel("Loss")
-    plt.legend()
-    plt.show()
 
-    fig = plt.figure(figsize=(8, 8))
-    plt.axis("off")
-    ims = [[plt.imshow(np.transpose(i, (1, 2, 0)), animated=True)] for i in img_list]
-    ani = animation.ArtistAnimation(fig, ims, interval=1000, repeat_delay=1000, blit=True)
+def create_models(number_of_gpus,
+                  latent_vector_size,
+                  generator_feature_maps_size,
+                  discriminator_feature_maps_size,
+                  number_of_channels,
+                  device):
+    generator = Generator(number_of_gpus,
+                          latent_vector_size,
+                          generator_feature_maps_size,
+                          number_of_channels).to(device)
+    discriminator = Discriminator(number_of_gpus,
+                                  number_of_channels,
+                                  discriminator_feature_maps_size).to(device)
+    if (device.type == 'cuda') and (number_of_gpus > 1):
+        generator = nn.DataParallel(generator,
+                                    list(range(number_of_gpus)))
+    if (device.type == 'cuda') and (number_of_gpus > 1):
+        discriminator = nn.DataParallel(discriminator,
+                                        list(range(number_of_gpus)))
+    generator.apply(weights_init)
+    discriminator.apply(weights_init)
+    return generator, discriminator
 
-    HTML(ani.to_jshtml())
 
-    real_batch = next(iter(dataloader))
+def get_available_device():
+    return torch.device("cuda:0" if (torch.cuda.is_available() and number_of_gpus > 0) else "cpu")
 
-    plt.figure(figsize=(15, 15))
-    plt.subplot(1, 2, 1)
-    plt.axis("off")
-    plt.title("Real Images")
-    plt.imshow(np.transpose(vutils.make_grid(real_batch[0].to(device)[:64], padding=5, normalize=True).cpu(),
-                            (1, 2, 0)))
 
-    plt.subplot(1, 2, 2)
-    plt.axis("off")
-    plt.title("Fake Images")
-    plt.imshow(np.transpose(img_list[-1], (1, 2, 0)))
-    plt.show()
+def create_optimizers(generator,
+                      discriminator,
+                      lr,
+                      beta1):
+    generator_optimizer = optim.Adam(generator.parameters(),
+                                     lr=lr,
+                                     betas=(beta1, 0.999))
+    discriminator_optimizer = optim.Adam(discriminator.parameters(),
+                                         lr=lr,
+                                         betas=(beta1, 0.999))
+    return generator_optimizer, discriminator_optimizer
+
+
+if __name__ == '__main__':
+    dataloader = create_dataloader(data_root=data_root,
+                                   image_size=image_size,
+                                   is_valid_file=check_is_valid_file,
+                                   batch_size=batch_size,
+                                   workers=workers)
+
+    device = get_available_device()
+    generator, discriminator = create_models(number_of_gpus=number_of_gpus,
+                                             latent_vector_size=latent_vector_size,
+                                             generator_feature_maps_size=generator_feature_maps_size,
+                                             discriminator_feature_maps_size=discriminator_feature_maps_size,
+                                             number_of_channels=number_of_channels,
+                                             device=device)
+
+    print(generator)
+    print(discriminator)
+
+    criterion = nn.BCELoss()
+    fixed_noise = torch.randn(64, latent_vector_size, 1, 1, device=device)
+    generator_optimizer, discriminator_optimizer = create_optimizers(generator=generator,
+                                                                     discriminator=discriminator,
+                                                                     lr=lr,
+                                                                     beta1=beta1)
+    img_list = []
+    generator_losses = []
+    discriminator_losses = []
+    iterations = 0
+
+    train(generator=generator,
+          discriminator=discriminator,
+          generator_optimizer=generator_optimizer,
+          discriminator_optimizer=discriminator_optimizer,
+          generator_losses=generator_losses,
+          discriminator_losses=discriminator_losses,
+          criterion=criterion,
+          num_epochs=num_epochs,
+          dataloader=dataloader,
+          device=device,
+          iterations=iterations,
+          img_list=img_list)
